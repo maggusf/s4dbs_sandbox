@@ -1,0 +1,178 @@
+version: "3.9"
+
+services:
+  s4dbs_postgres:
+    image: docker.io/timescale/timescaledb:2.11.2-pg13
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: 10m
+        max-file: "5"
+    volumes:
+      - s4dbs_postgres:/var/lib/postgresql/data
+    #ports:
+    #  - "5432:5432"
+    environment:
+      - POSTGRES_PASSWORD=<PasswordOfPostgresUser>
+    privileged: true
+    healthcheck:
+      test: ["CMD-SHELL", "su postgres -c \"psql -h localhost -c '\\q'\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+  s4dbs_collector:
+    image: docker.io/itgainis/s4dbs_collector:1.7.0
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: 10m
+        max-file: "5"
+          #    volumes:
+          # - ./licence/Speedgain_for_Databases.licence:/SPEEDGAIN/licence/Speedgain_for_Databases.licence # optional, can be uploaded via frontend
+    #ports:
+    #  - "60110:60110"
+    environment:
+      - PDB_USER=postgres
+      - PDB_PASS=<PasswordOfPostgresUser_specified_in_s4dbs_postgres_section>
+      - PDB_HOST=s4dbs_postgres
+      - PDB_PORT=5432
+      - PDB_DB_NAME=speedgain
+      - SPGLOGLEVEL=INFO
+    privileged: true
+    healthcheck:
+      test: ["CMD-SHELL", "ps -efa | grep \"java\" | grep \"Speedgain_for_Databases.jar\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      s4dbs_postgres:
+        condition: service_healthy
+  s4dbs_service:
+    image: docker.io/itgainis/s4dbs_service:1.7.0
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: 10m
+        max-file: "5"
+    #ports:
+    #  - "60120:60120"
+    environment:
+      - PDB_USER=postgres
+      - PDB_PASS=<PasswordOfPostgresUser_specified_in_s4dbs_postgres_section>
+      - PDB_HOST=s4dbs_postgres
+      - PDB_PORT=5432
+      - PDB_DB_NAME=speedgain
+      - PDB_PROPERTIES=
+      - SPGDB_SERVICE_HOME=/opt/spgdb_service_home/
+    privileged: true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f localhost:8080/Speedgain_for_Databases_Service"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    depends_on:
+      s4dbs_postgres:
+        condition: service_healthy
+  s4dbs_grafana:
+    image: docker.io/itgainis/s4dbs_grafana:1.7.0
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: 10m
+        max-file: "5"
+    volumes:
+      - s4dbs_grafana:/var/lib/grafana
+      - s4dbs_grafana_provision:/grafanaprovisioning
+      #- <localPathToCustomBoardsOrVolume>:/s4dbs_custom_boards # valid json files will be provisioned via script into S4DBs - Custom Folder
+    environment:
+      - PDB_USER=postgres
+      - PDB_PASS=<PasswordOfPostgresUser_specified_in_s4dbs_postgres_section>
+      - PDB_HOST=s4dbs_postgres
+      - PDB_PORT=5432
+      - PDB_DB_NAME=speedgain
+      #- GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/grafanaprovisioning/dashboards/s4dbs-spg/S4DBs-Overview.json
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s:%(http_port)s/grafana/
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_USERS_DEFAULT_THEME=light
+      - GF_PATHS_PLUGINS=/grafanaplugins/
+      - GF_PATHS_PROVISIONING=/grafanaprovisioning/
+    privileged: true
+    healthcheck:
+      test: ["CMD-SHELL", "ps -efa  |  grep \"grafana-server\" | grep \"packaging=docker\" "]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+    depends_on:
+      s4dbs_postgres:
+        condition: service_healthy
+  s4dbs_frontend:
+    image: docker.io/itgainis/s4dbs_frontend:1.7.0
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: 10m
+        max-file: "5"
+    environment:
+      - FRONTEND_CONFIG_MODE=false #set to false to generate frontend config based on calling URL (usefull for Kubernetes & OpenShift)
+      ## following parameters only needed if FRONTEND_CONFIG_MODE is set to true
+      #- SERVICE_PROTOCOL=http #use http or https
+      #- SERVICE_HOST=<enter container host hostname here>
+      #- SERVICE_PORT=80 #use 80 or 443
+      #- GRAFANA_PROTOCOL=http #use http or https
+      #- GRAFANA_HOST=<enter container host hostname here>
+      #- GRAFANA_PORT=80/grafana #use 80 or 443
+    privileged: true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f localhost:8080/s4dbs-ui/"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    depends_on:
+      s4dbs_service:
+        condition: service_healthy
+      s4dbs_grafana:
+        condition: service_healthy
+  s4dbs_reverse:
+    image: docker.io/nginx:1.27
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: 10m
+        max-file: "5"
+    ports:
+      - "80:80" # Disable this line when SSL should be used
+      #- "443:443"   # Enable this line to activate SSL
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f localhost:80"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+    depends_on:
+      s4dbs_grafana:
+        condition: service_healthy
+      s4dbs_frontend:
+        condition: service_healthy
+      s4dbs_service:
+        condition: service_healthy
+    volumes:
+      - ./configuration/nginx.conf:/etc/nginx/nginx.conf # Enable SSL in this config file
+      #- ./ssl/ssl_cert.key:/etc/ssl/ssl_cert.key    # Enable this line to activate SSL
+      #- ./ssl/ssl_cert.crt:/etc/ssl/ssl_cert.crt    # Enable this line to activate SSL
+volumes:
+  s4dbs_postgres:
+  s4dbs_grafana: 
+  s4dbs_grafana_provision: #s4dbs_grafana_custom_boards: #only needed if custom boards volume is used in grafana section
