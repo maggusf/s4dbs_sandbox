@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   s4dbs_postgres:
     image: docker.io/timescale/timescaledb:2.11.2-pg13
